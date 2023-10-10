@@ -135,8 +135,16 @@ func requestAndProcess(client *http.Client, command string, topLevelKey string, 
 			} else {
 				m := entryVal.(map[string]any)
 				for valKey, valVal := range m {
-					outputKey := strcase.ToSnake(topLevelKey + " " + entryKey + " " + valKey)
-					outputStatus[outputKey] = fmt.Sprintf("%v", valVal)
+					rt = reflect.TypeOf(valVal)
+					if rt.Kind() == reflect.Map {
+						for vk, vv := range valVal.(map[string]any) {
+							outputKey := strip.ReplaceAllString(strcase.ToSnake(topLevelKey+" "+entryKey+" "+valKey+" "+vk), "")
+							outputStatus[outputKey] = fmt.Sprintf("%v", vv)
+						}
+					} else {
+						outputKey := strcase.ToSnake(topLevelKey + " " + entryKey + " " + valKey)
+						outputStatus[outputKey] = fmt.Sprintf("%v", valVal)
+					}
 				}
 			}
 		}
