@@ -115,7 +115,6 @@ func requestAndProcess(client *http.Client, command string, topLevelKey string, 
 	for _, entry := range entries { // array of one-key maps
 		for entryKey, entryVal := range entry.(map[string]any) { // map of key => Any([]map[string]any, map[string]any)
 			rt := reflect.TypeOf(entryVal)
-			fmt.Printf("%s %s\n", entryKey, entryVal)
 
 			if rt.Kind() == reflect.Slice {
 				for _, val := range entryVal.([]any) {
