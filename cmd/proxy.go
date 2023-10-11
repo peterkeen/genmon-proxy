@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"reflect"
 	"regexp"
 
 	"github.com/iancoleman/strcase"
@@ -20,7 +19,10 @@ var (
 	addr     = flag.String("addr", ":80", "address to listen on")
 	hostname = flag.String("hostname", "genmon-proxy", "hostname to listen on")
 	upstream = flag.String("upstream", "", "upstream GenMon server")
+	strip    = regexp.MustCompile(`[^a-zA-Z0-9_ ]+`)
 )
+
+type outputMap = map[string]string
 
 func main() {
 	flag.Parse()
@@ -51,25 +53,25 @@ func main() {
 		})
 	}
 
-	var statusCommands = map[string]string{
-		"status_json":  "Status",
-		"maint_json":   "Maintenance",
-		"outage_json":  "Outage",
-		"monitor_json": "Monitor",
+	var statusCommands = []string{
+		"status_num_json",
+		"maint_json",
+		"outage_json",
+		"monitor_json",
 	}
 
 	log.Fatal(http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		errors := make(chan error, 0)
-		results := make(chan map[string]string, 0)
+		results := make(chan outputMap, 0)
 
-		for command, topLevelKey := range statusCommands {
-			go func(c string, k string) {
+		for _, command := range statusCommands {
+			go func(c string) {
 				client := s.HTTPClient()
-				requestAndProcess(client, c, k, results, errors)
-			}(command, topLevelKey)
+				requestAndProcess(client, c, results, errors)
+			}(command)
 		}
 
-		outputStatus := make(map[string]string)
+		outputStatus := make(outputMap)
 
 		for i := 0; i < len(statusCommands); i += 1 {
 			select {
@@ -91,7 +93,7 @@ func main() {
 	})))
 }
 
-func requestAndProcess(client *http.Client, command string, topLevelKey string, resultChan chan map[string]string, errorChan chan error) {
+func requestAndProcess(client *http.Client, command string, resultChan chan map[string]string, errorChan chan error) {
 	resp, err := client.Get(fmt.Sprintf("%s/cmd/%s", *upstream, command))
 
 	if err != nil {
@@ -99,8 +101,7 @@ func requestAndProcess(client *http.Client, command string, topLevelKey string, 
 		return
 	}
 
-	strip := regexp.MustCompile(`[^a-zA-Z0-9_ ]+`)
-	var parsed map[string]any
+	parsed := make(map[string]any)
 
 	err = json.NewDecoder(resp.Body).Decode(&parsed)
 	if err != nil {
@@ -108,47 +109,38 @@ func requestAndProcess(client *http.Client, command string, topLevelKey string, 
 		return
 	}
 
-	var outputStatus = make(map[string]string)
+	var outputStatus = make(outputMap)
 
-	entries := parsed[topLevelKey].([]any)
-
-	for _, entry := range entries { // array of one-key maps
-		for entryKey, entryVal := range entry.(map[string]any) { // map of key => Any([]map[string]any, map[string]any)
-			rt := reflect.TypeOf(entryVal)
-
-			if rt.Kind() == reflect.Slice {
-				for _, val := range entryVal.([]any) {
-					rt = reflect.TypeOf(val)
-					if rt.Kind() == reflect.String {
-						outputKey := strcase.ToSnake(topLevelKey + " " + entryKey)
-						outputStatus[outputKey] = val.(string)
-					} else {
-						for vk, vv := range val.(map[string]any) {
-							outputKey := strip.ReplaceAllString(strcase.ToSnake(topLevelKey+" "+entryKey+" "+vk), "")
-							outputStatus[outputKey] = fmt.Sprintf("%v", vv)
-						}
-					}
-				}
-			} else if rt.Kind() == reflect.String {
-				outputKey := strcase.ToSnake(topLevelKey + " " + entryKey)
-				outputStatus[outputKey] = entryVal.(string)
-			} else {
-				m := entryVal.(map[string]any)
-				for valKey, valVal := range m {
-					rt = reflect.TypeOf(valVal)
-					if rt.Kind() == reflect.Map {
-						for vk, vv := range valVal.(map[string]any) {
-							outputKey := strip.ReplaceAllString(strcase.ToSnake(topLevelKey+" "+entryKey+" "+valKey+" "+vk), "")
-							outputStatus[outputKey] = fmt.Sprintf("%v", vv)
-						}
-					} else {
-						outputKey := strcase.ToSnake(topLevelKey + " " + entryKey + " " + valKey)
-						outputStatus[outputKey] = fmt.Sprintf("%v", valVal)
-					}
-				}
-			}
+	for key, val := range parsed {
+		err := process(key, val, &outputStatus)
+		if err != nil {
+			errorChan <- err
 		}
 	}
 
 	resultChan <- outputStatus
+}
+
+func process(key string, value any, output *outputMap) error {
+	switch val := value.(type) {
+	case []any:
+		for _, e := range val {
+			err := process(key, e, output)
+			if err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		for k, v := range val {
+			err := process(key+" "+k, v, output)
+			if err != nil {
+				return err
+			}
+		}
+	default:
+		outputKey := strip.ReplaceAllString(strcase.ToSnake(key), "")
+		(*output)[outputKey] = fmt.Sprintf("%v", val)
+	}
+
+	return nil
 }
