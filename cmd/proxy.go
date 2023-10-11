@@ -24,6 +24,11 @@ var (
 
 type outputMap = map[string]string
 
+type result struct {
+	res outputMap
+	err error
+}
+
 func main() {
 	flag.Parse()
 	if *upstream == "" {
@@ -61,25 +66,24 @@ func main() {
 	}
 
 	log.Fatal(http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		errors := make(chan error, 0)
-		results := make(chan outputMap, 0)
+		results := make(chan result, 0)
 
 		for _, command := range statusCommands {
 			go func(c string) {
 				client := s.HTTPClient()
-				requestAndProcess(client, c, results, errors)
+				requestAndProcess(client, c, results)
 			}(command)
 		}
 
 		outputStatus := make(outputMap)
 
 		for i := 0; i < len(statusCommands); i += 1 {
-			select {
-			case err := <-errors:
-				http.Error(w, err.Error(), 500)
+			result := <- results
+			if result.err != nil {
+				http.Error(w, result.err.Error(), 500)
 				return
-			case result := <-results:
-				maps.Copy(outputStatus, result)
+			} else {
+				maps.Copy(outputStatus, result.res)
 			}
 		}
 
@@ -93,11 +97,14 @@ func main() {
 	})))
 }
 
-func requestAndProcess(client *http.Client, command string, resultChan chan map[string]string, errorChan chan error) {
+func requestAndProcess(client *http.Client, command string, resultChan chan result) {
 	resp, err := client.Get(fmt.Sprintf("%s/cmd/%s", *upstream, command))
 
+	res := result{make(outputMap), nil}
+
 	if err != nil {
-		errorChan <- err
+		res.err = err
+		resultChan <- res
 		return
 	}
 
@@ -105,17 +112,16 @@ func requestAndProcess(client *http.Client, command string, resultChan chan map[
 
 	err = json.NewDecoder(resp.Body).Decode(&parsed)
 	if err != nil {
-		errorChan <- err
+		res.err = err
+		resultChan <- res
 		return
 	}
 
-	var outputStatus = make(outputMap)
-
 	for key, val := range parsed {
-		process(key, val, &outputStatus)
+		process(key, val, &res.res)
 	}
 
-	resultChan <- outputStatus
+	resultChan <- res
 }
 
 func process(key string, value any, output *outputMap) {
