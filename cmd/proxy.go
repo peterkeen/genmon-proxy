@@ -112,35 +112,24 @@ func requestAndProcess(client *http.Client, command string, resultChan chan map[
 	var outputStatus = make(outputMap)
 
 	for key, val := range parsed {
-		err := process(key, val, &outputStatus)
-		if err != nil {
-			errorChan <- err
-		}
+		process(key, val, &outputStatus)
 	}
 
 	resultChan <- outputStatus
 }
 
-func process(key string, value any, output *outputMap) error {
+func process(key string, value any, output *outputMap) {
 	switch val := value.(type) {
 	case []any:
 		for _, e := range val {
-			err := process(key, e, output)
-			if err != nil {
-				return err
-			}
+			process(key, e, output)
 		}
 	case map[string]any:
 		for k, v := range val {
-			err := process(key+" "+k, v, output)
-			if err != nil {
-				return err
-			}
+			process(key+" "+k, v, output)
 		}
 	default:
 		outputKey := strip.ReplaceAllString(strcase.ToSnake(key), "")
 		(*output)[outputKey] = fmt.Sprintf("%v", val)
 	}
-
-	return nil
 }
