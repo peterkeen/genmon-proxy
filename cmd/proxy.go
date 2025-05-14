@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,15 +8,14 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"net"
 
 	"github.com/iancoleman/strcase"
 	"golang.org/x/exp/maps"
-	"tailscale.com/tsnet"
 )
 
 var (
 	addr     = flag.String("addr", ":80", "address to listen on")
-	hostname = flag.String("hostname", "genmon-proxy", "hostname to listen on")
 	upstream = flag.String("upstream", "", "upstream GenMon server")
 	strip    = regexp.MustCompile(`[^a-zA-Z0-9_ ]+`)
 )
@@ -36,27 +34,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	s := new(tsnet.Server)
-	s.Hostname = *hostname
-	defer s.Close()
-
-	ln, err := s.Listen("tcp", *addr)
+	ln, err := net.Listen("tcp4", *addr)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	defer ln.Close()
-
-	lc, err := s.LocalClient()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if *addr == ":443" {
-		ln = tls.NewListener(ln, &tls.Config{
-			GetCertificate: lc.GetCertificate,
-		})
-	}
 
 	var statusCommands = []string{
 		"status_num_json",
@@ -70,7 +53,7 @@ func main() {
 
 		for _, command := range statusCommands {
 			go func(c string) {
-				client := s.HTTPClient()
+				client := &http.Client{}
 				requestAndProcess(client, c, results)
 			}(command)
 		}
